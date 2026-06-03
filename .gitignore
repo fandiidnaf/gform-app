@@ -72,3 +72,11 @@ temp/
 # Electron Forge / Packager (optional leftovers)
 # =========================
 *.blockmap
+
+# Chrome / Electron user data
+Google/
+**/Google/Chrome/User Data/
+
+# Browser profiles / cache
+User Data/
+**/User Data/
