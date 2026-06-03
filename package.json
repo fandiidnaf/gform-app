@@ -1,0 +1,41 @@
+{
+  "name": "gform-automation",
+  "version": "1.0.0",
+  "description": "Google Form Auto Submission",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  },
+  "devDependencies": {
+    "electron": "^42.3.2",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.gform.automation",
+    "productName": "GForm Automation",
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/playwright",
+        "to": "playwright"
+      }
+    ]
+  }
+}

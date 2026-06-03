@@ -1,0 +1,74 @@
+# =========================
+# Dependencies
+# =========================
+node_modules/
+
+# =========================
+# Electron build output
+# =========================
+dist/
+out/
+release/
+build/
+*.app
+*.exe
+*.dmg
+*.zip
+*.asar
+
+# electron-builder cache
+.cache/
+electron-builder-cache/
+
+# =========================
+# Playwright
+# =========================
+playwright/.cache/
+test-results/
+playwright-report/
+blob-report/
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.local
+.env.*.local
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Editor
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Coverage (if used later)
+# =========================
+coverage/
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
+
+# =========================
+# Electron Forge / Packager (optional leftovers)
+# =========================
+*.blockmap
