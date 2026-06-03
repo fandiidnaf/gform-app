@@ -113,3 +113,8 @@ sehingga butuh Chrome yang terinstall, bukan hanya Chromium.
 - Pastikan path foto benar dan file masih ada
 - Ukuran maksimal yang didukung Google Form: 10 MB
 - Format yang didukung: jpg, jpeg, png, webp
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```

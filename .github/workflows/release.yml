@@ -31,18 +31,20 @@ jobs:
 
       - name: Build Electron App (Windows)
         run: npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List output files (debug)
         run: dir dist
 
       - name: Upload artifacts (backup)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: windows-build
           path: dist/**
 
       - name: Create GitHub Release & Upload Installer
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.exe
