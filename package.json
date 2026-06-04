@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "description": "Google Form Auto Submission",
   "main": "main.js",
+  "author": "",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win --x64"
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:all": "electron-builder -mwl"
   },
   "dependencies": {
     "playwright": "^1.44.0"
@@ -17,25 +22,52 @@
   "build": {
     "appId": "com.gform.automation",
     "productName": "GForm Automation",
-    "win": {
-      "target": "nsis",
-      "icon": "icon.ico"
+
+    "directories": {
+      "output": "dist"
     },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false
-    },
+
     "files": [
       "main.js",
       "preload.js",
+      "chrome.js",
+      "automation.js",
       "renderer/**/*",
       "package.json"
     ],
+
     "extraResources": [
       {
         "from": "node_modules/playwright",
         "to": "playwright"
       }
-    ]
+    ],
+
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.utilities"
+    },
+
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    }
   }
 }
