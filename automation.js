@@ -1,239 +1,260 @@
 const { chromium } = require('playwright');
 const path = require('path');
-const fs = require('fs');
+const fs   = require('fs');
+const os   = require('os');
 
-/**
- * SOLUSI CDP:
- * Connect ke Chrome yang sudah buka via remote debugging port.
- * Chrome harus dijalankan dulu dengan flag --remote-debugging-port=9222
- *
- * Cara jalankan Chrome dengan CDP:
- * Windows: "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
- *
- * Aplikasi ini akan otomatis launch Chrome dengan flag tersebut jika belum buka.
- */
+// Port CDP berbeda untuk setiap instance Chrome
+const BASE_CDP_PORT = 9222;
 
-const CDP_PORT = 9222;
-const CHROME_PATHS_WINDOWS = [
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe',
-];
-
-async function runSubmissions({ records, data, sendProgress, onUpdate, screenshotDir }) {
-  if (!fs.existsSync(screenshotDir)) {
-    fs.mkdirSync(screenshotDir, { recursive: true });
+function getCDPUserDataDir(profileDir) {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || os.homedir(), 'gform-automation', 'chrome-cdp-' + profileDir);
+  } else if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'gform-automation', 'chrome-cdp-' + profileDir);
   }
-
-  // ── Step 1: Pastikan Chrome berjalan dengan remote debugging ──
-  sendProgress({ id: null, status: 'info', message: '🔌 Menghubungkan ke Chrome...' });
-
-  let browser;
-  try {
-    browser = await connectToChrome(sendProgress);
-  } catch (err) {
-    sendProgress({ id: null, status: 'failed', message: `✗ Gagal connect ke Chrome: ${err.message}` });
-    // Update semua records jadi failed
-    for (const record of records) {
-      onUpdate(record.id, { status: 'failed', error: `Gagal connect ke Chrome: ${err.message}` });
-    }
-    return;
-  }
-
-  sendProgress({ id: null, status: 'info', message: '✓ Terhubung ke Chrome' });
-
-  // ── Step 2: Proses setiap submission ──
-  for (const record of records) {
-    const truck   = data.trucks.find(t => t.id === record.truckId);
-    const account = data.accounts.find(a => a.id === record.accountId);
-
-    if (!truck || !account) {
-      onUpdate(record.id, { status: 'failed', error: 'Data truk atau akun tidak ditemukan' });
-      sendProgress({ id: record.id, status: 'failed', message: `✗ Data tidak ditemukan untuk record ${record.id}` });
-      continue;
-    }
-
-    sendProgress({ id: record.id, status: 'running', message: `⏳ Memproses ${truck.vehicleNumber} (${account.email})...` });
-
-    // Setiap submission pakai tab baru di Chrome yang sama
-    let page;
-    try {
-      // Buka tab baru di Chrome yang sudah login
-      const context = browser.contexts()[0];
-      page = await context.newPage();
-
-      await page.goto(record.formUrl, { waitUntil: 'networkidle', timeout: 30000 });
-
-      // Cek apakah kena redirect login Google — kalau iya, akun belum login
-      const currentUrl = page.url();
-      if (currentUrl.includes('accounts.google.com')) {
-        throw new Error(`Akun ${account.email} belum login di Chrome. Silakan login dulu di Chrome lalu coba lagi.`);
-      }
-
-      // Isi semua field berdasarkan LABEL
-      await fillFieldByLabel(page, 'Email',        account.email);
-      await fillFieldByLabel(page, 'Nama',         truck.driverName);
-      await fillFieldByLabel(page, 'No Kendaraan', truck.vehicleNumber);
-      await fillFieldByLabel(page, 'No Hp',        truck.phoneNumber);
-
-      // Upload foto kendaraan
-      await uploadFileByLabel(page, 'Foto Kendaraan', truck.photoPath);
-
-      // Klik Submit
-      await page.click(
-        '[role="button"]:has-text("Submit"), button:has-text("Submit"), ' +
-        '[role="button"]:has-text("Kirim"), button:has-text("Kirim")',
-        { timeout: 10000 }
-      );
-
-      // Tunggu halaman konfirmasi
-      await page.waitForURL(/formResponse/, { timeout: 15000 });
-
-      onUpdate(record.id, { status: 'success', submittedAt: new Date().toISOString() });
-      sendProgress({ id: record.id, status: 'success', message: `✓ ${truck.vehicleNumber} berhasil disubmit` });
-
-      // Tutup tab setelah selesai
-      await page.close();
-
-    } catch (err) {
-      // Screenshot saat error
-      let screenshotPath = null;
-      if (page && !page.isClosed()) {
-        try {
-          screenshotPath = path.join(screenshotDir, `error-${record.id}-${Date.now()}.png`);
-          await page.screenshot({ path: screenshotPath, fullPage: true });
-          await page.close();
-        } catch {}
-      }
-
-      const errorMsg = err.message || String(err);
-      onUpdate(record.id, { status: 'failed', error: errorMsg, screenshotPath });
-      sendProgress({ id: record.id, status: 'failed', message: `✗ ${truck.vehicleNumber}: ${errorMsg}` });
-    }
-
-    // Jeda 2 detik antar submission
-    await sleep(2000);
-  }
+  return path.join(os.homedir(), '.config', 'gform-automation', 'chrome-cdp-' + profileDir);
 }
 
-// ── Connect ke Chrome via CDP ──────────────────────────────────────────────
-async function connectToChrome(sendProgress) {
-  // Coba connect dulu ke Chrome yang sudah berjalan
-  try {
-    const browser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`);
-    return browser;
-  } catch {
-    // Chrome belum berjalan dengan flag debugging — launch dulu
-    sendProgress({ id: null, status: 'info', message: '🚀 Chrome belum aktif, membuka Chrome baru...' });
-    await launchChromeWithDebugging();
-    await sleep(2500); // tunggu Chrome siap
-
-    // Coba connect lagi
-    const browser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`);
-    return browser;
+function getChromeUserDataDir() {
+  if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'User Data');
+  } else if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
   }
+  return path.join(os.homedir(), '.config', 'google-chrome');
 }
 
-// ── Launch Chrome dengan remote debugging port ─────────────────────────────
-async function launchChromeWithDebugging() {
+function findChromePath() {
+  const candidates = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+  ];
+  return candidates.find(p => fs.existsSync(p)) || null;
+}
+
+function copyProfileForCDP(profileDir) {
+  const srcBase = getChromeUserDataDir();
+  const dstBase = getCDPUserDataDir(profileDir);
+  const src = path.join(srcBase, profileDir);
+
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dstBase, { recursive: true });
+
+  // Copy Local State
+  const localStateSrc = path.join(srcBase, 'Local State');
+  const localStateDst = path.join(dstBase, 'Local State');
+  if (fs.existsSync(localStateSrc)) {
+    try { fs.copyFileSync(localStateSrc, localStateDst); } catch {}
+  }
+
+  // Copy file session penting
+  const dst = path.join(dstBase, profileDir);
+  fs.mkdirSync(dst, { recursive: true });
+
+  const filesToCopy = [
+    'Cookies', 'Cookies-journal',
+    'Login Data', 'Login Data-journal',
+    'Web Data', 'Web Data-journal',
+    'Preferences', 'Secure Preferences',
+  ];
+
+  for (const f of filesToCopy) {
+    const s = path.join(src, f);
+    const d = path.join(dst, f);
+    if (fs.existsSync(s)) {
+      try { fs.copyFileSync(s, d); } catch {}
+    }
+  }
+
+  copyDirIfExists(path.join(src, 'Network'), path.join(dst, 'Network'));
+}
+
+function copyDirIfExists(src, dst) {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dst, { recursive: true });
+  try {
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, entry.name);
+      const d = path.join(dst, entry.name);
+      if (entry.isDirectory()) copyDirIfExists(s, d);
+      else { try { fs.copyFileSync(s, d); } catch {} }
+    }
+  } catch {}
+}
+
+async function launchChromeForProfile(profileDir, cdpPort) {
+  const chromePath = findChromePath();
+  if (!chromePath) throw new Error('Google Chrome tidak ditemukan');
+
+  copyProfileForCDP(profileDir);
+
+  const userDataDir = getCDPUserDataDir(profileDir);
   const { spawn } = require('child_process');
 
-  let chromePath = '';
-
-  if (process.platform === 'win32') {
-    for (const p of CHROME_PATHS_WINDOWS) {
-      if (fs.existsSync(p)) { chromePath = p; break; }
-    }
-  } else if (process.platform === 'darwin') {
-    chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  } else {
-    chromePath = '/usr/bin/google-chrome';
-  }
-
-  if (!chromePath || !fs.existsSync(chromePath)) {
-    throw new Error(
-      'Google Chrome tidak ditemukan di komputer ini. ' +
-      'Pastikan Chrome sudah terinstall.'
-    );
-  }
-
   const proc = spawn(chromePath, [
-    `--remote-debugging-port=${CDP_PORT}`,
+    `--remote-debugging-port=${cdpPort}`,
+    `--user-data-dir=${userDataDir}`,
+    `--profile-directory=${profileDir}`,
     '--no-first-run',
     '--no-default-browser-check',
   ], { detached: true, stdio: 'ignore' });
+  proc.unref();
 
-  proc.unref(); // biarkan jalan di background
+  // Polling sampai CDP aktif (max 15 detik)
+  const http = require('http');
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    const active = await new Promise(resolve => {
+      const req = http.get(`http://127.0.0.1:${cdpPort}/json/version`, res => {
+        res.resume(); resolve(res.statusCode === 200);
+      });
+      req.on('error', () => resolve(false));
+      req.setTimeout(1000, () => { req.destroy(); resolve(false); });
+    });
+    if (active) return;
+  }
+  throw new Error(`CDP port ${cdpPort} tidak merespons untuk profile ${profileDir}`);
 }
 
-// ── Helper: Isi field berdasarkan label ───────────────────────────────────
-async function fillFieldByLabel(page, labelText, value) {
-  const selectors = [
-    `.freebirdFormviewerComponentsQuestionBaseTitle:has-text("${labelText}")`,
-    `[data-params*="${labelText}"]`,
-    `text="${labelText}"`,
-  ];
+async function runSubmissions({ records, data, sendProgress, onUpdate, screenshotDir }) {
+  if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
 
-  let fieldContainer = null;
+  sendProgress({ id: null, status: 'info', message: `🚀 Meluncurkan ${records.length} Chrome instance secara paralel...` });
 
-  for (const sel of selectors) {
-    const loc = page.locator(sel).first();
-    if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
-      fieldContainer = loc.locator(
-        'xpath=ancestor::div[@data-params or contains(@class,"freebirdFormviewerComponentsQuestion")]'
-      ).last();
-      break;
-    }
-  }
-
-  if (!fieldContainer) {
-    throw new Error(`Label "${labelText}" tidak ditemukan di form`);
-  }
-
-  const input = fieldContainer.locator('input[type="text"], input[type="email"], textarea').first();
-  if (await input.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await input.click();
-    await input.fill(value);
-    return;
-  }
-
-  throw new Error(`Input untuk label "${labelText}" tidak ditemukan`);
-}
-
-// ── Helper: Upload file berdasarkan label ─────────────────────────────────
-async function uploadFileByLabel(page, labelText, filePath) {
-  if (!filePath || !fs.existsSync(filePath)) {
-    throw new Error(`File foto tidak ditemukan: ${filePath}`);
-  }
-
-  const labelLoc = page.locator(
-    `.freebirdFormviewerComponentsQuestionBaseTitle:has-text("${labelText}"), text="${labelText}"`
-  ).first();
-
-  if (!await labelLoc.isVisible({ timeout: 3000 }).catch(() => false)) {
-    throw new Error(`Label "${labelText}" tidak ditemukan di form`);
-  }
-
-  const fieldContainer = labelLoc.locator(
-    'xpath=ancestor::div[@data-params or contains(@class,"freebirdFormviewerComponentsQuestion")]'
-  ).last();
-
-  const [fileChooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 10000 }),
-    fieldContainer.locator('[role="button"]:has-text("Add file"), [role="button"]:has-text("Tambahkan file")').first().click(),
-  ]);
-
-  await fileChooser.setFiles(filePath);
-
-  // Tunggu sampai nama file muncul (upload selesai)
-  await page.waitForSelector(
-    '[data-filename], .freebirdFormviewerComponentsQuestionFileUploadFileName',
-    { timeout: 30000 }
+  // Jalankan semua submission paralel — masing-masing buka Chrome instance sendiri
+  await Promise.allSettled(
+    records.map((record, index) => {
+      const cdpPort = BASE_CDP_PORT + index; // 9222, 9223, 9224, ...
+      return runSingle({ record, data, browser: null, cdpPort, sendProgress, onUpdate, screenshotDir });
+    })
   );
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function runSingle({ record, data, cdpPort, sendProgress, onUpdate, screenshotDir }) {
+  const truck   = data.trucks.find(t => t.id === record.truckId);
+  const account = data.accounts.find(a => a.id === record.accountId);
+
+  if (!truck || !account) {
+    const msg = 'Data truk atau akun tidak ditemukan';
+    onUpdate(record.id, { status: 'failed', error: msg });
+    sendProgress({ id: record.id, status: 'failed', message: `✗ ${msg}` });
+    return;
+  }
+
+  const profileDir = account.profileDir || 'Default';
+  sendProgress({ id: record.id, status: 'running', message: `⏳ Membuka Chrome (${profileDir}) untuk ${truck.vehicleNumber}...` });
+
+  let browser;
+  let page;
+
+  try {
+    // Launch Chrome instance khusus untuk profile ini
+    await launchChromeForProfile(profileDir, cdpPort);
+
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+    const context = browser.contexts()[0];
+    page = await context.newPage();
+
+    sendProgress({ id: record.id, status: 'running', message: `⏳ Membuka form untuk ${truck.vehicleNumber}...` });
+
+    await page.goto(record.formUrl, { waitUntil: 'networkidle', timeout: 30000 });
+
+    if (page.url().includes('accounts.google.com')) {
+      throw new Error(`Profile ${profileDir} belum login Google.`);
+    }
+
+    const alreadyResponded = await page.locator("text=You've already responded").first().isVisible({ timeout: 2000 }).catch(() => false);
+    if (alreadyResponded) {
+      throw new Error(`Akun di profile ${profileDir} sudah pernah submit form ini.`);
+    }
+
+    await fillFieldByLabel(page, 'Email',         account.email);
+    await fillFieldByLabel(page, 'Nama',          truck.driverName);
+    await fillFieldByLabel(page, 'No Kendaraan',  truck.vehicleNumber);
+    await fillFieldByLabel(page, 'No Hp',         truck.phoneNumber);
+    await uploadFileByLabel(page, 'Foto Kendaraan', truck.photoPath);
+
+    // Tunggu iframe picker hilang sebelum klik Submit
+    await page.waitForFunction(() => {
+      for (const iframe of document.querySelectorAll('iframe')) {
+        const rect = iframe.getBoundingClientRect();
+        if (rect.width > 100 && rect.height > 100) return false;
+      }
+      return true;
+    }, { timeout: 30000 }).catch(() => {});
+
+    await sleep(500);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await sleep(300);
+
+    const submitBtn = page.locator(
+      '[role="button"]:has-text("Submit"), button:has-text("Submit"),' +
+      '[role="button"]:has-text("Kirim"), button:has-text("Kirim")'
+    ).first();
+
+    await submitBtn.waitFor({ state: 'visible', timeout: 10000 });
+    await submitBtn.click({ force: true });
+
+    await page.waitForURL(/formResponse/, { timeout: 15000 });
+
+    onUpdate(record.id, { status: 'success', submittedAt: new Date().toISOString() });
+    sendProgress({ id: record.id, status: 'success', message: `✓ ${truck.vehicleNumber} (${profileDir}) berhasil disubmit` });
+
+  } catch (err) {
+    let screenshotPath = null;
+    if (page && !page.isClosed()) {
+      try {
+        screenshotPath = path.join(screenshotDir, `error-${record.id}-${Date.now()}.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+      } catch {}
+    }
+    const errorMsg = err.message || String(err);
+    onUpdate(record.id, { status: 'failed', error: errorMsg, screenshotPath });
+    sendProgress({ id: record.id, status: 'failed', message: `✗ ${truck.vehicleNumber}: ${errorMsg}` });
+
+  } finally {
+    // Tutup browser instance setelah selesai
+    if (page && !page.isClosed()) { try { await page.close(); } catch {} }
+    if (browser) { try { await browser.close(); } catch {} }
+  }
 }
+
+async function fillFieldByLabel(page, labelText, value) {
+  const question = page.locator('div[role="listitem"]').filter({ hasText: labelText }).first();
+
+  if (!await question.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error(`Label "${labelText}" tidak ditemukan di form`);
+  }
+
+  const input = question.locator('input[type="text"], input[type="email"], textarea').first();
+
+  if (!await input.isVisible({ timeout: 3000 }).catch(() => false)) {
+    throw new Error(`Input untuk "${labelText}" tidak ditemukan`);
+  }
+
+  await input.fill(value);
+}
+
+async function uploadFileByLabel(page, labelText, filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`File tidak ditemukan: ${filePath}`);
+  }
+
+  const question = page.locator('div[role="listitem"]').filter({ hasText: labelText }).first();
+  const uploadButton = question.locator('div[role="button"]').filter({
+    hasText: /add file|tambahkan file|upload/i,
+  }).first();
+  await uploadButton.click();
+
+  const pickerFrame = page.frameLocator('iframe').last();
+  const fileInput = pickerFrame.locator('input[type="file"]').first();
+  await fileInput.setInputFiles(filePath);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 module.exports = { runSubmissions };

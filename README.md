@@ -115,6 +115,11 @@ sehingga butuh Chrome yang terinstall, bukan hanya Chromium.
 - Format yang didukung: jpg, jpeg, png, webp
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.0.1
+git push origin v0.0.1
+```
+
+```bash
+git push origin --delete tag v0.0.1
+git tag -d v0.0.1
 ```
